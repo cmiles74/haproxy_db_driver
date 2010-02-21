@@ -64,12 +64,6 @@ acceptor.bind(address)
 # start listening on the socket
 acceptor.listen(10)
 
-# trap for a process exit and stop listening
-trap('EXIT') {
-
-  acceptor.close
-}
-
 # remove the pid file, if it exists
 if File.exists?(PID_FILE)
 
@@ -93,10 +87,14 @@ NUM_PROCESSES.times do |worker_id|
   # create a new child process, write the pid to our file
   pid = fork do
 
-    # trap for process break and exit
-    trap('INT') { exit }
+    # the child processes will exit when interrupted. note that their
+    # pids will still be in the pid file, even if they exit early.
+    trap('INT') do
 
-    loop {
+      exit
+    end
+
+    loop do
 
       # block until a new connection is ready to be de-queued
       socket, addr = acceptor.accept
@@ -155,7 +153,7 @@ NUM_PROCESSES.times do |worker_id|
         socket.flush
         socket.close
       end
-    }
+    end
   end
 
   # write out the pid of the child process
@@ -166,7 +164,10 @@ end
 pid_file_handle.close
 
 # trap for interrupt
-trap('INT') {
+trap('INT') do
+
+  # close our port
+  acceptor.close
 
   # remove the pid file, if it exists
   if File.exists?(PID_FILE)
@@ -183,7 +184,7 @@ trap('INT') {
 
   # our work here is done
   exit
-}
+end
 
 # wait for all child processes to exit
 Process.waitall
