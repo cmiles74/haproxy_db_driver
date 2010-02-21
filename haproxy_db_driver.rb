@@ -10,181 +10,249 @@
 #
 # Pasted at http://gist.github.com/213990
 #
+class HaproxyDbDriver
+
+  require 'rubygems'
+  require 'socket'
+  require 'dbi'
+  require 'ftools'
+  require 'yaml'
+  require 'logging'
+
+  # default configuration file path
+  DEFAULT_CONFIG_PATH = '/etc/haproxy_db_driver.rb'
+
+  # array of child processes
+  CHILDREN = Array.new
+
+  # log level for console output
+  attr_accessor :log_level
+
+  # ip address on which we'll listen
+  attr_accessor :ip_address
+
+  # the port on which we'll listen
+  attr_accessor :port
+
+  # the number of children process we'll spawn
+  attr_accessor :children
+
+  # the type of database we'll be checking
+  attr_accessor :db_engine
+
+  # the host that is running the database
+  attr_accessor :db_host
+
+  # the name of the database to which we will connect
+  attr_accessor :db_name
+
+  # the username to use when connecting to the database
+  attr_accessor :db_username
+
+  # the password to use when connecting to the database
+  attr_accessor :db_password
+
+  # the path to our pid file
+  attr_accessor :pid_file_path
+
+  def initialize(config_path = DEFAULT_CONFIG_PATH)
+
+    # setup a logging instance
+    @logger = Logging.logger(STDOUT)
+    @logger.level = :info
+
+    # make sure our configuration file exists
+    if !File.exists?(config_path)
+
+      @logger.warn "No configuration file found at #{CONFIG_PATH}"
+      raise "No configuration file found at #{config_path}"
+    end
+
+    # load in our configuration
+    configuration = YAML::load_file(config_path)
+
+    # set our variables
+    @ip_address = configuration["ip_address"]
+    @port = configuration["port"]
+    @children = configuration["children"]
+    @db_engine = configuration["db_engine"]
+    @db_name = configuration["db_name"]
+    @db_host = configuration["db_host"]
+    @db_username = configuration["db_username"]
+    @db_password = configuration["db_password"]
+    @pid_file_path = configuration["pid_file_path"]
+  end
+
+  def remove_pid
+
+    # remove the pid file, if it exists
+    if File.exists?(@pid_file_path)
+
+      begin
+
+        File.delete(@pid_file_path)
+      rescue
+
+        # the pid file isn't writable, warn and quit
+        @logger.warn("Could not delete pid file at #{@pid_file_path}")
+        exit
+      end
+    end
+  end
+
+  def start_child(socket)
+
+    pid = fork do
+
+      # the child processes will exit when interrupted. note that their
+      # pids will still be in the pid file, even if they exit early.
+      ['INT', 'EXIT', 'TERM'].each do |signal|
+
+        # in both cases, shut down the child
+        trap(signal) do
+
+          exit
+        end
+      end
+
+      loop do
+
+        # block until a new connection is ready to be de-queued
+        client, client_socket_address =socket.accept
+
+        # get the incoming message
+        incoming_message = client.gets
+
+        # flag to indicate successful connection
+        db_is_connected = false
+
+        begin
+
+          # connect to the db server
+          dbi_handle = DBI.connect("dbi:#{@db_engine}:#{@db_name}:#{@db_host}",
+                                   @db_username, @db_password)
+
+          # make sure our connection is good
+          db_is_connected = dbi_handle.connected?
+
+          # indicate that the database is running
+          message = "#{db_host} is working hard. :)"
+        rescue
+
+          # indicate that the database is down or busy
+          message = "Uh-oh! #{@db_host} did not respond. :("
+        ensure
+
+          # close our data base connection
+          if dbi_handle
+
+            dbi_handle.disconnect
+          end
+        end
+
+        # log the status of our connection
+        @logger.info(message)
+
+        # send the response code, we return a 503 if the database
+        # didn't respond
+        if db_is_connected
+
+          client.write "HTTP/1.1 200 OK\n"
+        else
+
+          client.write "HTTP/1.1 503 Service Unavailable\n"
+        end
+
+        # send the rest of the header
+        client.write "Date: #{Time.now}\r\n"
+        client.write "Server: Simple Ruby Server\r\n"
+        client.write "Expires: #{Time.now}\r\n"
+        client.write "Content-Type: text/html; charset=UTF-8\r\n"
+        client.write "\r\n"
+
+        # send out message
+        client.write "#{message}\r\n"
+
+        # close and flush our socket
+        client.flush
+        client.close
+      end
+    end
+
+    # return the pid of this child process
+    return(pid)
+  end
+
+  def start_server
+
+    @logger.info("Starting the Haproxy DB Driver process...")
+
+    # create a socket and bind to port
+    socket = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+    socket_address = Socket.pack_sockaddr_in(@port, @ip_address)
+    socket.bind(socket_address)
+
+    # start listening on the socket
+    socket.listen(10)
+
+    # remove any old pid files
+    remove_pid
+
+    # add our pid to the pid file and close the file
+    pid_file_handle = File.open(@pid_file_path, 'a')
+
+    # write out our pid
+    pid_file_handle.puts(Process.pid)
+
+    @children.times do
+
+      # start a new child process
+      child_pid = start_child(socket)
+
+      # add the pid to our array of children
+      CHILDREN << child_pid
+
+      # write the child's pid to our pid file
+      pid_file_handle.puts(child_pid)
+    end
+
+    # close the pid file
+    pid_file_handle.close
+
+    # trap for interrupts and exit
+    ['INT', 'EXIT', 'TERM'].each do |signal|
+
+      # in both cases, shut down the server
+      trap(signal) do
+
+        @logger.info("Shutting down Haproxy DB Driver...")
+
+        # loop through our children and kill each one
+        CHILDREN.each do |child_pid|
+
+          Process.kill('TERM', child_pid)
+        end
+
+        # close our port
+        socket.close
+
+        # remove our pid file
+        remove_pid
+      end
+    end
+  end
+end
 
 require 'rubygems'
-require 'socket'
-require 'dbi'
-require 'ftools'
-require 'yaml'
 require 'logging'
 
 # setup a logging instance
 logger = Logging.logger(STDOUT)
 logger.level = :info
 
-# default configuration file path
-DEFAULT_CONFIG_PATH = '/etc/haproxy_db_driver.rb'
-
-# if we've been passed a configuration file on the command line, then
-# use it instead of the default path
-if ARGV && ARGV.size > 0
-
-  CONFIG_PATH = ARGV[0]
-else
-
-  CONFIG_PATH = DEFAULT_CONFIG_PATH
-end
-
-# if the config file doesn't exist, exit
-if !File.exists?(CONFIG_PATH)
-
-  logger.warn "No configuration file found at #{CONFIG_PATH}"
-  exit
-end
-
-# load in our configuration
-configuration = YAML::load_file(CONFIG_PATH)
-
-# configuration
-BIND_ADDRESS = configuration["ip_address"]
-BIND_PORT = configuration["port"]
-NUM_PROCESSES = configuration["children"]
-DB_ENGINE = configuration["db_engine"]
-DB_NAME = configuration["db_name"]
-DB_HOST = configuration["db_host"]
-DB_USER = configuration["db_username"]
-DB_PASSWORD = configuration["db_password"]
-PID_FILE = configuration["pid_file_path"]
-
-# create a socket and bind to port
-acceptor = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-address = Socket.pack_sockaddr_in(BIND_PORT, BIND_ADDRESS)
-acceptor.bind(address)
-
-# start listening on the socket
-acceptor.listen(10)
-
-# remove the pid file, if it exists
-if File.exists?(PID_FILE)
-
-  begin
-
-    File.delete(PID_FILE)
-  rescue
-
-    # the pid file isn't writable, warn and quit
-    logger.warn("Could not delete pid file at #{PID_FILE}")
-    exit
-  end
-end
-
-# add our pid to the pid file and close the file
-pid_file_handle = File.open(PID_FILE, 'a')
-
-# fork the child processes
-NUM_PROCESSES.times do |worker_id|
-
-  # create a new child process, write the pid to our file
-  pid = fork do
-
-    # the child processes will exit when interrupted. note that their
-    # pids will still be in the pid file, even if they exit early.
-    trap('INT') do
-
-      exit
-    end
-
-    loop do
-
-      # block until a new connection is ready to be de-queued
-      socket, addr = acceptor.accept
-
-      # get the incoming message
-      incoming_message = socket.gets
-
-      # flag to indicate successful connection
-      db_is_connected = false
-
-      begin
-
-        # connect to the db server
-        cn = DBI.connect("dbi:#{DB_ENGINE}:#{DB_NAME}:#{DB_HOST}",
-                         DB_USER, DB_PASSWORD)
-
-        # make sure our connection is good
-        db_is_connected = cn.connected?
-      rescue
-
-        message = "Uh-oh! #{DB_ENGINE} did not respond. :("
-      ensure
-
-        # close our data base connection
-        if cn
-
-          cn.disconnect
-        end
-      end
-
-      # log the status of our connection
-      logger.info  message
-
-      # send our status
-      if db_is_connected
-
-        logger.info "db_is_connected"
-        socket.write "HTTP/1.1 200 OK\n"
-      else
-
-        socket.write "HTTP/1.1 503 Service Unavailable\n"
-      end
-
-      # send the header
-      socket.write "Date: #{Time.now}\r\n"
-      socket.write "Server: Simple Ruby Server\r\n"
-      socket.write "Expires: #{Time.now}\r\n"
-      socket.write "Content-Type: text/html; charset=UTF-8\r\n"
-      socket.write "\r\n"
-
-      # send out message
-      socket.write "#{message}\r\n"
-
-      # close and flush our socket
-      if socket
-        socket.flush
-        socket.close
-      end
-    end
-  end
-
-  # write out the pid of the child process
-  pid_file_handle.puts(pid)
-end
-
-# close our pid file
-pid_file_handle.close
-
-# trap for interrupt
-trap('INT') do
-
-  # close our port
-  acceptor.close
-
-  # remove the pid file, if it exists
-  if File.exists?(PID_FILE)
-
-    begin
-
-      File.delete(PID_FILE)
-    rescue
-
-      # the pid file isn't writable, warn and quit
-      logger.warn("Could not delete pid file at #{PID_FILE}")
-    end
-  end
-
-  # our work here is done
-  exit
-end
+# start a new haproxy db driver
+haproxy_db_driver = HaproxyDbDriver.new(ARGV[0])
+haproxy_db_driver.start_server
 
 # wait for all child processes to exit
 Process.waitall
