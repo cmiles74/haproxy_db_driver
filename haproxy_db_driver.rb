@@ -54,8 +54,7 @@ DB_NAME = configuration["db_name"]
 DB_HOST = configuration["db_host"]
 DB_USER = configuration["db_username"]
 DB_PASSWORD = configuration["db_password"]
-
-PID_FILE = 'pgsql_check.pid'
+PID_FILE = configuration["pid_file_path"]
 
 # create a socket and bind to port
 acceptor = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
@@ -71,14 +70,28 @@ trap('EXIT') {
   acceptor.close
 }
 
-# fork the child processes
-pid_file =  File.open(PID_FILE, 'a')
+# remove the pid file, if it exists
+if File.exists?(PID_FILE)
 
+  begin
+
+    File.delete(PID_FILE)
+  rescue
+
+    # the pid file isn't writable, warn and quit
+    logger.warn("Could not delete pid file at #{PID_FILE}")
+    exit
+  end
+end
+
+# add our pid to the pid file and close the file
+pid_file_handle = File.open(PID_FILE, 'a')
+
+# fork the child processes
 NUM_PROCESSES.times do |worker_id|
 
-  fork do
-    pid_file.puts Process.pid
-    pid_file.close if worker_id = NUM_PROCESSES
+  # create a new child process, write the pid to our file
+  pid = fork do
 
     # trap for process break and exit
     trap('INT') { exit }
@@ -100,25 +113,30 @@ NUM_PROCESSES.times do |worker_id|
         cn = DBI.connect("dbi:#{DB_ENGINE}:#{DB_NAME}:#{DB_HOST}",
                          DB_USER, DB_PASSWORD)
 
-        server_version = cn.server_version
-
-        message = "#{DB_ENGINE} (version #{server_version}) is A-Okay!\n\n"
+        # make sure our connection is good
         db_is_connected = cn.connected?
       rescue
 
         message = "Uh-oh! #{DB_ENGINE} did not respond. :("
       ensure
 
-        cn.disconnect if cn
+        # close our data base connection
+        if cn
+
+          cn.disconnect
+        end
       end
 
+      # log the status of our connection
       logger.info  message
 
       # send our status
       if db_is_connected
+
         logger.info "db_is_connected"
         socket.write "HTTP/1.1 200 OK\n"
       else
+
         socket.write "HTTP/1.1 503 Service Unavailable\n"
       end
 
@@ -132,17 +150,38 @@ NUM_PROCESSES.times do |worker_id|
       # send out message
       socket.write "#{message}\r\n"
 
+      # close and flush our socket
       if socket
         socket.flush
         socket.close
       end
     }
   end
+
+  # write out the pid of the child process
+  pid_file_handle.puts(pid)
 end
 
-# trap interrupt and exit
+# close our pid file
+pid_file_handle.close
+
+# trap for interrupt
 trap('INT') {
 
+  # remove the pid file, if it exists
+  if File.exists?(PID_FILE)
+
+    begin
+
+      File.delete(PID_FILE)
+    rescue
+
+      # the pid file isn't writable, warn and quit
+      logger.warn("Could not delete pid file at #{PID_FILE}")
+    end
+  end
+
+  # our work here is done
   exit
 }
 
