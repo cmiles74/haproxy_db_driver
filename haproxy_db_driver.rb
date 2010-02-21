@@ -27,7 +27,6 @@ NUM_PROCESSES = 5
 DB_ENGINE = 'Pg'
 DB_NAME = 'name'
 DB_HOST = 'host'
-DB_PORT = 5432
 DB_USER = 'user'
 DB_PASSWORD = 'pwd'
 PID_FILE = 'pgsql_check.pid'
@@ -67,84 +66,68 @@ NUM_PROCESSES.times do |worker_id|
     # trap for process break and exit
     trap('INT') { exit }
 
-   # puts "child #$$ accepting on shared socket (localhost:9999)"
+    # puts "child #$$ accepting on shared socket (localhost:9999)"
 
     loop {
-#      begin
-        # block until a new connection is ready to be de-queued
-        socket, addr = acceptor.accept      
-logger.info '--------------------------'
-logger.info Time.now
 
+      # block until a new connection is ready to be de-queued
+      socket, addr = acceptor.accept
 
-        # get the incoming message - this is the value of option httpck in haproxy.cfg
-        # leveraging this to allow us to pass in what db we want to check 
-        # so we only have to have a single set of workers for all dbs instead of a set for each db.
-        # need to have a yaml config containing details for each db connection to be tested. so one yaml
-        # file with a stanza for each virtual db server in haproxy.cfg
-        incoming_message = socket.gets
+      # get the incoming message
+      incoming_message = socket.gets
 
-        http_method, requested_db_check, http_version = incoming_message.to_s.split
+      # flag to indicate successful connection
+      db_is_connected = false
 
-        # flag to indicate successful connection
-        db_is_connected = false
-        
-        begin
+      begin
 
-          # connect to the db server
-          cn = DBI.connect("dbi:#{DB_ENGINE}:#{DB_NAME}:#{DB_HOST}",
-                           DB_USER, DB_PASSWORD)
+        # connect to the db server
+        cn = DBI.connect("dbi:#{DB_ENGINE}:#{DB_NAME}:#{DB_HOST}",
+                         DB_USER, DB_PASSWORD)
 
-          server_version = cn.server_version
+        server_version = cn.server_version
 
-          message = "#{DB_ENGINE} (version #{server_version}) is A-Okay!\n\n"
-          db_is_connected = cn.connected?
-        rescue
+        message = "#{DB_ENGINE} (version #{server_version}) is A-Okay!\n\n"
+        db_is_connected = cn.connected?
+      rescue
 
-          message = "Uh-oh! #{DB_ENGINE} did not respond. :(\n\n"
-        ensure
+        message = "Uh-oh! #{DB_ENGINE} did not respond. :(\n\n"
+      ensure
 
-          cn.disconnect if cn
-        end
+        cn.disconnect if cn
+      end
 
-logger.info  message
-        # send our status
-        if db_is_connected
-logger.info "db_is_connected"
+      logger.info  message
 
-          socket.write "HTTP/1.1 200 OK\n"
-        else
-logger.info "dead_count #{dead_count}"
-          dead_count += 1
-          socket.write "HTTP/1.1 503 Service Unavailable\n"
+      # send our status
+      if db_is_connected
+        logger.info "db_is_connected"
+        socket.write "HTTP/1.1 200 OK\n"
+      else
+        logger.info "dead_count #{dead_count}"
+        dead_count += 1
+        socket.write "HTTP/1.1 503 Service Unavailable\n"
+      end
 
-        end
+      # send the header
+      socket.write "Date: #{Time.now}\r\n"
+      socket.write "Server: Simple Ruby Server\r\n"
+      socket.write "Expires: #{Time.now}\r\n"
+      socket.write "Content-Type: text/html; charset=UTF-8\r\n"
+      socket.write "\r\n"
 
-        # send the header
-        socket.write "Date: #{Time.now}\r\n"
-        socket.write "Server: Simple Ruby Server\r\n"
-        socket.write "Expires: #{Time.now}\r\n"
-        socket.write "Content-Type: text/html; charset=UTF-8\r\n"
-        socket.write "\r\n"
+      # send out message
+      socket.write message
 
-        # send out message
-        socket.write message
+      if socket
+        socket.flush
+        socket.close
+      end
 
-       # puts "child #$$ invoked with: '#{incoming_message.strip}'"
-#      rescue => e
-       # puts "child puked: #{e.message}"
-        
-#      ensure 
-        # close the socket
-        if socket
-          socket.flush
-          socket.close
-        end
-          if dead_count >= DEAD_LIMIT
-logger.info "DEAD!!"
-            system TRIGGER_CMD 
-          end
-#      end
+      if dead_count >= DEAD_LIMIT
+        logger.info "DEAD!!"
+        system TRIGGER_CMD 
+      end
     }
   end
 end
@@ -152,7 +135,6 @@ end
 # trap interrupt and exit
 trap('INT') {
 
- # puts "Exiting..."
   exit
 }
 
