@@ -86,8 +86,6 @@ NUM_PROCESSES.times do |worker_id|
     # trap for process break and exit
     trap('INT') { exit }
 
-    # puts "child #$$ accepting on shared socket (localhost:9999)"
-
     loop {
 
       # block until a new connection is ready to be de-queued
