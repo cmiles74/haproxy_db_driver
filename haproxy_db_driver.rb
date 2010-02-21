@@ -56,9 +56,6 @@ DB_USER = configuration["db_username"]
 DB_PASSWORD = configuration["db_password"]
 
 PID_FILE = 'pgsql_check.pid'
-DEAD_LIMIT = 5
-dead_count = 0
-TRIGGER_CMD = "ssh #{DB_HOST} \"su -c 'touch /tmp/pgsql.trigger' postgres\""
 
 # create a socket and bind to port
 acceptor = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
@@ -122,8 +119,6 @@ NUM_PROCESSES.times do |worker_id|
         logger.info "db_is_connected"
         socket.write "HTTP/1.1 200 OK\n"
       else
-        logger.info "dead_count #{dead_count}"
-        dead_count += 1
         socket.write "HTTP/1.1 503 Service Unavailable\n"
       end
 
@@ -140,11 +135,6 @@ NUM_PROCESSES.times do |worker_id|
       if socket
         socket.flush
         socket.close
-      end
-
-      if dead_count >= DEAD_LIMIT
-        logger.info "DEAD!!"
-        system TRIGGER_CMD
       end
     }
   end
