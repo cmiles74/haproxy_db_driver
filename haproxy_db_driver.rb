@@ -14,6 +14,10 @@
 require 'rubygems'
 require 'socket'
 require 'pg'
+require 'logging'
+
+# default configuration file path
+DEFAULT_CONFIG_PATH = '/etc/haproxy_db_driver.rb'
 
 # configuration
 BIND_ADDRESS = '127.0.0.1'
@@ -32,6 +36,10 @@ DEAD_LIMIT = 5
 dead_count = 0
 
 TRIGGER_CMD = "ssh #{DB_HOST} \"su -c 'touch /tmp/pgsql.trigger' postgres\""
+
+# setup a logging instance
+logger = Logging.logger(STDOUT)
+logger.level = :info
 
 # create a socket and bind to port
 acceptor = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
@@ -65,8 +73,8 @@ NUM_PROCESSES.times do |worker_id|
 #      begin
         # block until a new connection is ready to be de-queued
         socket, addr = acceptor.accept      
-puts '--------------------------'
-puts Time.now
+logger.info '--------------------------'
+logger.info Time.now
 
 
         # get the incoming message - this is the value of option httpck in haproxy.cfg
@@ -110,14 +118,14 @@ puts Time.now
           cn.close if cn
         end
 
-puts message
+logger.info  message
         # send our status
         if db_is_connected
-puts "db_is_connected"
+logger.info "db_is_connected"
 
           socket.write "HTTP/1.1 200 OK\n"
         else
-puts "dead_count #{dead_count}"
+logger.info "dead_count #{dead_count}"
           dead_count += 1
           socket.write "HTTP/1.1 503 Service Unavailable\n"
 
@@ -144,7 +152,7 @@ puts "dead_count #{dead_count}"
           socket.close
         end
           if dead_count >= DEAD_LIMIT
-puts "DEAD!!"
+logger.info "DEAD!!"
             system TRIGGER_CMD 
           end
 #      end
