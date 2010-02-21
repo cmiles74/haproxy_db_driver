@@ -13,7 +13,7 @@
 
 require 'rubygems'
 require 'socket'
-require 'pg'
+require 'dbi'
 require 'logging'
 
 # default configuration file path
@@ -24,7 +24,7 @@ BIND_ADDRESS = '127.0.0.1'
 BIND_PORT = 'port'
 NUM_PROCESSES = 5
 
-DB_ENGINE = 'PostgreSQL'
+DB_ENGINE = 'Pg'
 DB_NAME = 'name'
 DB_HOST = 'host'
 DB_PORT = 5432
@@ -91,31 +91,20 @@ logger.info Time.now
         
         begin
 
-          case requested_db_check
-          when 'pgsql'
-            # connect to the db server begin connect = connection =
-            cn = PGconn.connect(DB_HOST, DB_PORT, '', '', DB_NAME, DB_USER, DB_PASSWORD)
+          # connect to the db server
+          cn = DBI.connect("dbi:#{DB_ENGINE}:#{DB_NAME}:#{DB_HOST}",
+                           DB_USER, DB_PASSWORD)
 
-            server_version = cn.server_version
+          server_version = cn.server_version
 
-            message = "#{DB_ENGINE} (version #{server_version}) is A-Okay!\n\n"
-            db_is_connected = true
-
-          when 'mssql'
-            # check for mssql
-
-          when 'mysql'
-            # check for mysql
-
-          end
-
+          message = "#{DB_ENGINE} (version #{server_version}) is A-Okay!\n\n"
+          db_is_connected = cn.connected?
         rescue
 
           message = "Uh-oh! #{DB_ENGINE} did not respond. :(\n\n"
         ensure
 
-
-          cn.close if cn
+          cn.disconnect if cn
         end
 
 logger.info  message
