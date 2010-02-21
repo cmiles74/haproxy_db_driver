@@ -14,31 +14,51 @@
 require 'rubygems'
 require 'socket'
 require 'dbi'
+require 'ftools'
+require 'yaml'
 require 'logging'
-
-# default configuration file path
-DEFAULT_CONFIG_PATH = '/etc/haproxy_db_driver.rb'
-
-# configuration
-BIND_ADDRESS = '127.0.0.1'
-BIND_PORT = 'port'
-NUM_PROCESSES = 5
-
-DB_ENGINE = 'Pg'
-DB_NAME = 'name'
-DB_HOST = 'host'
-DB_USER = 'user'
-DB_PASSWORD = 'pwd'
-PID_FILE = 'pgsql_check.pid'
-
-DEAD_LIMIT = 5
-dead_count = 0
-
-TRIGGER_CMD = "ssh #{DB_HOST} \"su -c 'touch /tmp/pgsql.trigger' postgres\""
 
 # setup a logging instance
 logger = Logging.logger(STDOUT)
 logger.level = :info
+
+# default configuration file path
+DEFAULT_CONFIG_PATH = '/etc/haproxy_db_driver.rb'
+
+# if we've been passed a configuration file on the command line, then
+# use it instead of the default path
+if ARGV && ARGV.size > 0
+
+  CONFIG_PATH = ARGV[0]
+else
+
+  CONFIG_PATH = DEFAULT_CONFIG_PATH
+end
+
+# if the config file doesn't exist, exit
+if !File.exists?(CONFIG_PATH)
+
+  logger.warn "No configuration file found at #{CONFIG_PATH}"
+  exit
+end
+
+# load in our configuration
+configuration = YAML::load_file(CONFIG_PATH)
+
+# configuration
+BIND_ADDRESS = configuration["ip_address"]
+BIND_PORT = configuration["port"]
+NUM_PROCESSES = configuration["children"]
+DB_ENGINE = configuration["db_engine"]
+DB_NAME = configuration["db_name"]
+DB_HOST = configuration["db_host"]
+DB_USER = configuration["db_username"]
+DB_PASSWORD = configuration["db_password"]
+
+PID_FILE = 'pgsql_check.pid'
+DEAD_LIMIT = 5
+dead_count = 0
+TRIGGER_CMD = "ssh #{DB_HOST} \"su -c 'touch /tmp/pgsql.trigger' postgres\""
 
 # create a socket and bind to port
 acceptor = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
@@ -91,7 +111,7 @@ NUM_PROCESSES.times do |worker_id|
         db_is_connected = cn.connected?
       rescue
 
-        message = "Uh-oh! #{DB_ENGINE} did not respond. :(\n\n"
+        message = "Uh-oh! #{DB_ENGINE} did not respond. :("
       ensure
 
         cn.disconnect if cn
@@ -117,7 +137,7 @@ NUM_PROCESSES.times do |worker_id|
       socket.write "\r\n"
 
       # send out message
-      socket.write message
+      socket.write "#{message}\r\n"
 
       if socket
         socket.flush
@@ -126,7 +146,7 @@ NUM_PROCESSES.times do |worker_id|
 
       if dead_count >= DEAD_LIMIT
         logger.info "DEAD!!"
-        system TRIGGER_CMD 
+        system TRIGGER_CMD
       end
     }
   end
@@ -140,4 +160,3 @@ trap('INT') {
 
 # wait for all child processes to exit
 Process.waitall
-

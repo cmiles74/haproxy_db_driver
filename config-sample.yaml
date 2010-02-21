@@ -1,0 +1,9 @@
+log_level: debug
+ip_address: 127.0.0.1
+port: 9099
+children: 5
+db_engine: Mysql
+db_name: testdb
+db_host: 127.0.0.1
+db_username: haproxy
+db_password: password
