@@ -8,15 +8,15 @@ not.
 The configuration file should be a YAML file that contains the
 following keys...
 
- - log_level: console logger level
- - ip_address: the IP address to which the server will bind
- - port: the port ot which the server will bind
- - children: the number of children process to fork
- - db_engine: the type of database (DBI) to test
- - db_name: the name of the database to test
- - db_host: the server running the database to test
- - db_username: the username to use when connecting to the database
- - db_password: the password to use when connecting to the database
- - pid_file_path: the path to the location to write the pids
+- log_level:: console logger level
+- ip_address:: the IP address to which the server will bind
+- port:: the port ot which the server will bind
+- children:: the number of children process to fork
+- db_engine:: the type of database (DBI) to test
+- db_name:: the name of the database to test
+- db_host:: the server running the database to test
+- db_username:: the username to use when connecting to the database
+- db_password:: the password to use when connecting to the database
+- pid_file_path:: the path to the location to write the pids
 
 A sample configuration file (config-sample.yaml) is provided.
