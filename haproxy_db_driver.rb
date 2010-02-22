@@ -1,15 +1,9 @@
 #!/usr/bin/ruby
 #
-# A simple pre-forking server that tests to make sure the MySQL server
-# is available.
-#
-# Based so heavily on the following article by Ryan Tomakyo that it's
-# practically a verbatim copy.
-#
-#  http://tomayko.com/writings/unicorn-is-unix
-#
-# Pasted at http://gist.github.com/213990
-#
+# Provides a pre-forking server that can be used as a driver for
+# HAProxy. The server will responss with either a HTTP 200 header if
+# the database is accepting connections and a http 503 header if it is
+# not.
 class HaproxyDbDriver
 
   require 'rubygems'
@@ -55,6 +49,26 @@ class HaproxyDbDriver
   # the path to our pid file
   attr_accessor :pid_file_path
 
+  # Initializes the HaproxyDbDriver. If the path to a configuration
+  # file is given, that file will be used when initializing the
+  # instance. If no path is provided, we'll look in
+  # /etc/haproxy_db_driver.yaml.
+  #
+  # The configuration file should be a YAML file that contains the
+  # following keys...
+  #
+  # - log_level: console logger level
+  # - ip_address: the IP address to which the server will bind
+  # - port: the port ot which the server will bind
+  # - children: the number of children process to fork
+  # - db_engine: the type of database (DBI) to test
+  # - db_name: the name of the database to test
+  # - db_host: the server running the database to test
+  # - db_username: the username to use when connecting to the database
+  # - db_password: the password to use when connecting to the database
+  # - pid_file_path: the path to the location to write the pids
+  #
+  # config_path:: path to the configuration file
   def initialize(config_path = DEFAULT_CONFIG_PATH)
 
     # setup a logging instance
@@ -83,6 +97,7 @@ class HaproxyDbDriver
     @pid_file_path = configuration["pid_file_path"]
   end
 
+  # Removes the pid file from the file system.
   def remove_pid
 
     # remove the pid file, if it exists
@@ -100,6 +115,9 @@ class HaproxyDbDriver
     end
   end
 
+  # Starts a child process on the provided socket.
+  #
+  # socket:: The socket that the child process will use
   def start_child(socket)
 
     pid = fork do
@@ -183,6 +201,22 @@ class HaproxyDbDriver
     return(pid)
   end
 
+  # Stops the children processes by sending each of them the
+  # termination signal.
+  def stop_children
+
+    # loop through our children and kill each one
+    CHILDREN.each do |child_pid|
+
+      Process.kill('TERM', child_pid)
+    end
+  end
+
+  # Starts a new server process and forks off our child
+  # processes. This method will never return, it waits for all of the
+  # children process to complete before exiting. This is a good thing,
+  # the process that invokes this method will listen for termination
+  # signals and will ensure that the child processes quit.
   def start_server
 
     @logger.info("Starting the Haproxy DB Driver process...")
@@ -227,11 +261,8 @@ class HaproxyDbDriver
 
         @logger.info("Shutting down Haproxy DB Driver...")
 
-        # loop through our children and kill each one
-        CHILDREN.each do |child_pid|
-
-          Process.kill('TERM', child_pid)
-        end
+        # stops the children processes
+        stop_children
 
         # close our port
         socket.close
@@ -240,19 +271,24 @@ class HaproxyDbDriver
         remove_pid
       end
     end
+
+    Process.wait
   end
 end
-
-require 'rubygems'
-require 'logging'
 
 # setup a logging instance
 logger = Logging.logger(STDOUT)
 logger.level = :info
 
-# start a new haproxy db driver
-haproxy_db_driver = HaproxyDbDriver.new(ARGV[0])
-haproxy_db_driver.start_server
+# start the server in a new process
+pid = fork do
 
-# wait for all child processes to exit
-Process.waitall
+  # start a new haproxy db driver
+  haproxy_db_driver = HaproxyDbDriver.new(ARGV[0])
+  haproxy_db_driver.start_server
+end
+
+# detach the process so it can run in the background and exit the
+# script
+Process.detach(pid)
+
