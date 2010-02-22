@@ -1,4 +1,4 @@
-#HA Proxy Database Driver
+= HA Proxy Database Driver
 
 Provides a pre-forking server that can be used as a driver for
 HAProxy. The server will responss with either a HTTP 200 header if
