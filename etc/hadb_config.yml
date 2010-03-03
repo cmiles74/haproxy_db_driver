@@ -1,0 +1,32 @@
+server:
+  ip_address: localhost
+  port: 8060
+  children: 5
+  pid_file: /usr/local/haproxy/health_checks/hadb.pid
+
+# add dbs to be checked here:
+postgres:
+  engine: Pg
+  host: db1
+  port: 5432
+  name: database_name
+  username: health_check
+  password: password
+  failover_cmd: ssh db2 "su -c 'touch /tmp/pgsql_main.trigger' postgres"
+  stonith_cmd: ssh db1 pg_ctlcluster --force 8.4 main stop
+
+mssql:
+  engine: ODBC
+  name: odbc_datasource_name
+  username: user
+  password: password
+
+mysql:
+  engine: Mysql
+  host: db1
+  port: 3306
+  name: database_name
+  username: user
+  password: password
+  failover_cmd: ssh db2 /etc/init.d/mysql start
+  stonith_cmd: ssh db1 /etc/init.d/mysql stop
