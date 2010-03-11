@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env ruby
 ### BEGIN INIT INFO
 # Provides:          haproxy
 # Required-Start:    $local_fs $network
@@ -9,163 +9,136 @@
 # Description:       This file should be used to start and stop haproxy.
 ### END INIT INFO
 
-# Author: Arnaud Cornet <acornet@debian.org>
+# Adapted from the haproxy bash init script by Arnaud Cornet <acornet@debian.org>
+require 'rubygems'
+require 'logging'
 
-PIDFILE=/var/run/haproxy.pid
-CONFIG=/usr/local/haproxy/current/etc/haproxy.cfg
-HAPROXY=/usr/local/haproxy/current/sbin/haproxy
-EXTRAOPTS=
+HAPROXY_NAME = "HAProxy"
+HAPROXY = "/usr/local/haproxy/current/sbin/haproxy"
+HAPROXY_PID = "/var/run/haproxy.pid"
+HAPROXY_CONFIG = "/usr/local/haproxy/current/etc/haproxy.cfg"
+HAPROXY_OPTS = ""
 
-HEALTH_CHECK=/usr/local/haproxy/health_checks/pgsql_check.rb
-HEALTH_CHECK_PID=/usr/local/haproxy/health_checks/pgsql_check.pid
+HEALTH_CHECK = "/usr/local/haproxy/health_checks/hadb.rb"
+HEALTH_CHECK_PID = "/usr/local/haproxy/health_checks/hadb.pid"
+LOG_FILE = '/usr/local/haproxy/health_checks/hadb.log'
 
-[ -f /etc/default/rcS ] && . /etc/default/rcS
-. /lib/lsb/init-functions
-
-test -x $HAPROXY || exit 0
-test -f "$CONFIG" || exit 0
-
-haproxy_start()
-{
-
-  # problem is that it can fail silently allowing haproxy to start up without drivers so production db gets 
-  # failed over. also, because script doesn't wait for checks to load, haproxy starts up before checks are running
-  # causing server to be marked as down initially
-	/usr/local/haproxy/health_checks/pgsql_check.rb &
-	#start-stop-daemon --start --exec $HEALTH_CHECK
-	start-stop-daemon --start --pidfile "$PIDFILE" --exec $HAPROXY -- -f "$CONFIG" -D -p "$PIDFILE" $EXTRAOPTS || return 2
-
-	return 0
-}
-
-haproxy_stop()
-{
-  if [ -f $HEALTH_CHECK_PID ] ; then
-  	for pid in $(cat $HEALTH_CHECK_PID) ; do
-	  	/bin/kill $pid 
-  	done
-	  rm -f $HEALTH_CHECK_PID
-	fi
-
-	if [ ! -f $PIDFILE ] ; then
-		# This is a success according to LSB
-		return 0
-	fi
-	for pid in $(cat $PIDFILE) ; do
-		/bin/kill $pid || return 4
-	done
-	rm -f $PIDFILE
-	
-
-	return 0
-}
-
-haproxy_reload()
-{
-	$HAPROXY -f "$CONFIG" -p $PIDFILE -D $EXTRAOPTS -sf $(cat $PIDFILE) \
-		|| return 2
-	return 0
-}
-
-haproxy_status()
-{
-	if [ ! -f $PIDFILE ] ; then
-		# program not running
-		return 3
-	fi
-
-	for pid in $(cat $PIDFILE) ; do
-		if ! ps --no-headers p "$pid" | grep haproxy > /dev/null ; then
-			# program running, bogus pidfile
-			return 1
-		fi
-	done
-
-	return 0
-}
+Logging.init :debug, :info, :warn, :error, :fatal
+layout = Logging::Layouts::Pattern.new :pattern => "[%d][%l][%c] %m\n"
+@logger = Logging.logger['init']
+@logger.add_appenders(
+  Logging.appenders.file(LOG_FILE, :layout => layout),
+  Logging.appenders.stdout
+)
+@logger.level = :info
 
 
-case "$1" in
-start)
-	log_daemon_msg "Starting haproxy" "haproxy"
-	haproxy_start
-	ret=$?
-	case "$ret" in
-	0)
-		log_end_msg 0
-		;;
-	1)
-		log_end_msg 1
-		echo "pid file '$PIDFILE' found, haproxy not started."
-		;;
-	2)
-		log_end_msg 1
-		;;
-	esac
-	exit $ret
-	;;
-stop)
-	log_daemon_msg "Stopping haproxy" "haproxy"
-	haproxy_stop
-	ret=$?
-	case "$ret" in
-	0|1)
-		log_end_msg 0
-		;;
-	2)
-		log_end_msg 1
-		;;
-	esac
-	exit $ret
-	;;
-reload|force-reload)
-	log_daemon_msg "Reloading haproxy" "haproxy"
-	haproxy_reload
-	case "$?" in
-	0|1)
-		log_end_msg 0
-		;;
-	2)
-		log_end_msg 1
-		;;
-	esac
-	;;
-restart)
-	log_daemon_msg "Restarting haproxy" "haproxy"
-	haproxy_stop
-	haproxy_start
-	case "$?" in
-	0)
-		log_end_msg 0
-		;;
-	1)
-		log_end_msg 1
-		;;
-	2)
-		log_end_msg 1
-		;;
-	esac
-	;;
-status)
-	haproxy_status
-	ret=$?
-	case "$ret" in
-	0)
-		echo "haproxy is running."
-		;;
-	1)
-		echo "haproxy dead, but $PIDFILE exists."
-		;;
-	*)
-		echo "haproxy not running."
-		;;
-	esac
-	exit $ret
-	;;
-*)
-	echo "Usage: /etc/init.d/haproxy {start|stop|reload|restart|status}"
-	exit 2
-	;;
-esac
+def kill_pids(pid_file)
+  @logger.info "killing pid file: #{pid_file}"
 
-:
+  # just wait a second to allow any handles to be released
+  # otherwise it just seems to open an empty file and so kills nothing.
+  # example is when db driver has syntax error.
+  sleep 2
+  if File.exist? pid_file
+    File.open(pid_file) do |file|
+      while pid = file.gets
+        begin
+          Process.kill(:TERM, pid.to_i) 
+          @logger.info "init killing: ##{pid}"
+        rescue => e 
+          @logger.error "init errror killing: ##{pid} #{e.message}"
+        end
+      end
+    end
+    File.delete pid_file
+  end
+end
+
+
+def haproxy_start
+  @logger.info "------------------------------"
+  begin
+
+    raise "HAProxy db driver failed to start. Aborting HAProxy startup..." unless system HEALTH_CHECK
+
+    # system returns bool vs `` which returns stdout string. so use system as check but throw away output otherwise
+    # it shows up messily on console. lastly, grep itself appears in this search so throw it out.
+    raise "HAProxy db driver started, but doesn't seem to be running. aborting..." unless system "ps aux | grep #{HEALTH_CHECK} | grep -v grep > /dev/null"
+    @logger.info "HAProxy db driver up and running. Starting HAProxy..."
+
+    raise "HAProxy failed to start. Killing db drivers..." unless  system "start-stop-daemon --start --pidfile #{HAPROXY_PID} --exec #{HAPROXY} -- -f #{HAPROXY_CONFIG} -D #{HAPROXY_OPTS} -p #{HAPROXY_PID}"  
+    true
+  rescue => e
+
+    @logger.error e.message
+    kill_pids HAPROXY_PID
+    kill_pids HEALTH_CHECK_PID
+    false
+  end
+end
+
+def haproxy_stop
+  kill_pids HEALTH_CHECK_PID
+  kill_pids HAPROXY_PID
+
+  true
+end
+
+def haproxy_reload
+	system "#{HAPROXY} -f #{HAPROXY_CONFIG} -p #{HAPROXY_PID} -D #{HAPROXY_OPTS} -sf #{IO.read(HAPROXY_PID)}"
+  
+end
+
+def haproxy_status
+
+  case
+	when !File.exist?(HAPROXY_PID)
+	  "not running"
+  else
+
+# needs reworking to check if process but no pid and vice versa
+# bonus points for reconstituting a pid if missing on running process etc
+# there should be a gem for pid file management
+#	for pid in $(cat $PIDFILE) ; do
+#		if ! ps --no-headers p "$pid" | grep haproxy > /dev/null ; then
+#			# program running, bogus pidfile
+#			return 1
+#		fi
+
+    "running"
+  end
+
+end
+
+
+case ARGV[0]
+when "start"
+	if haproxy_start
+    @logger.info "#{HAPROXY_NAME} started"
+  else
+    @logger.error "#{HAPROXY_NAME} failed to start."
+  end
+
+when "stop"
+  if haproxy_stop
+    @logger.info "#{HAPROXY_NAME} stopped"
+  end
+
+when "reload", "force-reload"
+  if haproxy_reload
+    @logger.info "#{HAPROXY_NAME} reloaded"
+  end
+
+when "restart"
+  if haproxy_stop && haproxy_start
+    @logger.info "#{HAPROXY_NAME} restarted"
+  end
+
+when "status"
+  @logger.info "#{HAPROXY_NAME} is #{haproxy_status}"
+
+else
+	@logger.info "Usage: /etc/init.d/haproxy {start|stop|reload|restart|status}"
+end
+
